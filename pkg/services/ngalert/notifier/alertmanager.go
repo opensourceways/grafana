@@ -265,6 +265,11 @@ func (am *Alertmanager) applyConfig(cfg *apimodels.PostableUserConfig) error {
 	if err != nil {
 		return err
 	}
+	externalURL, err := url.Parse(am.Settings.AppURL)
+	if err != nil {
+		return err
+	}
+	tmpl.ExternalURL = externalURL
 
 	// Finally, build the integrations map using the receiver configuration and templates.
 	integrationsMap, err := am.buildIntegrationsMap(cfg.AlertmanagerConfig.Receivers, tmpl)
@@ -346,17 +351,15 @@ func (am *Alertmanager) buildReceiverIntegrations(receiver *apimodels.PostableAp
 			n   NotificationChannel
 			err error
 		)
-		externalURL, err := url.Parse(am.Settings.AppURL)
-		if err != nil {
-			return nil, err
-		}
 		switch r.Type {
 		case "email":
-			n, err = channels.NewEmailNotifier(cfg, externalURL)
+			n, err = channels.NewEmailNotifier(cfg, tmpl.ExternalURL)
 		case "pagerduty":
-			n, err = channels.NewPagerdutyNotifier(cfg, tmpl, externalURL)
+			n, err = channels.NewPagerdutyNotifier(cfg, tmpl)
 		case "slack":
-			n, err = channels.NewSlackNotifier(cfg, tmpl, externalURL)
+			n, err = channels.NewSlackNotifier(cfg, tmpl)
+		case "webhook":
+			n, err = channels.NewWebHookNotifier(cfg, tmpl)
 		}
 		if err != nil {
 			return nil, err

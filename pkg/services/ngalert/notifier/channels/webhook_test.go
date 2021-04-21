@@ -3,7 +3,6 @@ package channels
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"net/url"
 	"testing"
 
@@ -19,7 +18,7 @@ import (
 	"github.com/grafana/grafana/pkg/services/alerting"
 )
 
-func TestSlackNotifier(t *testing.T) {
+func TestWebhookNotifier(t *testing.T) {
 	tmpl, err := template.FromGlobs("templates/default.tmpl")
 	require.NoError(t, err)
 
@@ -31,17 +30,13 @@ func TestSlackNotifier(t *testing.T) {
 		name         string
 		settings     string
 		alerts       []*types.Alert
-		expMsg       *slackMessage
+		expMsg       *webhookMessage
 		expInitError error
 		expMsgError  error
 	}{
 		{
-			name: "Correct config with one alert",
-			settings: `{
-				"url": "https://test.slack.com",
-				"recipient": "#testchannel",
-				"icon_emoji": ":emoji:"
-			}`,
+			name:     "Default config with one alert",
+			settings: `{"url": "http://localhost/test"}`,
 			alerts: []*types.Alert{
 				{
 					Alert: model.Alert{
@@ -50,66 +45,100 @@ func TestSlackNotifier(t *testing.T) {
 					},
 				},
 			},
-			expMsg: &slackMessage{
-				Channel:   "#testchannel",
-				Username:  "Grafana",
-				IconEmoji: ":emoji:",
-				Attachments: []attachment{
-					{
-						Title:      "[FIRING:1]  (val1)",
-						TitleLink:  "TODO: rule URL",
-						Text:       "",
-						Fallback:   "[FIRING:1]  (val1)",
-						Fields:     nil,
-						Footer:     "Grafana v",
-						FooterIcon: "https://grafana.com/assets/img/fav32.png",
-						Color:      "#D63232",
-						Ts:         0,
+			expMsg: &webhookMessage{
+				Data: &template.Data{
+					Receiver: "my_receiver",
+					Status:   "firing",
+					Alerts: template.Alerts{
+						{
+							Status: "firing",
+							Labels: template.KV{
+								"alertname": "alert1",
+								"lbl1":      "val1",
+							},
+							Annotations: template.KV{
+								"ann1": "annv1",
+							},
+							Fingerprint: "fac0861a85de433a",
+						},
 					},
+					GroupLabels: template.KV{
+						"alertname": "",
+					},
+					CommonLabels: template.KV{
+						"alertname": "alert1",
+						"lbl1":      "val1",
+					},
+					CommonAnnotations: template.KV{
+						"ann1": "annv1",
+					},
+					ExternalURL: "http://localhost",
 				},
+				Version:  "1",
+				GroupKey: "alertname",
+				Title:    "[FIRING:1]  (val1)",
+				State:    "alerting",
+				Message:  "\n**Firing**\nLabels:\n - alertname = alert1\n - lbl1 = val1\nAnnotations:\n - ann1 = annv1\nSource: \n\n\n\n\n",
 			},
 			expInitError: nil,
 			expMsgError:  nil,
-		},
-		{
-			name: "Correct config with multiple alerts and template",
-			settings: `{
-				"url": "https://test.slack.com",
-				"recipient": "#testchannel",
-				"icon_emoji": ":emoji:",
-				"title": "{{ .Alerts.Firing | len }} firing, {{ .Alerts.Resolved | len }} resolved"
-			}`,
+		}, {
+			name:     "Custom config with multiple alerts",
+			settings: `{"url": "http://localhost/test"}`,
 			alerts: []*types.Alert{
 				{
 					Alert: model.Alert{
 						Labels:      model.LabelSet{"alertname": "alert1", "lbl1": "val1"},
 						Annotations: model.LabelSet{"ann1": "annv1"},
 					},
-				},
-				{
+				}, {
 					Alert: model.Alert{
 						Labels:      model.LabelSet{"alertname": "alert1", "lbl1": "val2"},
 						Annotations: model.LabelSet{"ann1": "annv2"},
 					},
 				},
 			},
-			expMsg: &slackMessage{
-				Channel:   "#testchannel",
-				Username:  "Grafana",
-				IconEmoji: ":emoji:",
-				Attachments: []attachment{
-					{
-						Title:      "2 firing, 0 resolved",
-						TitleLink:  "TODO: rule URL",
-						Text:       "",
-						Fallback:   "[FIRING:2]  ",
-						Fields:     nil,
-						Footer:     "Grafana v",
-						FooterIcon: "https://grafana.com/assets/img/fav32.png",
-						Color:      "#D63232",
-						Ts:         0,
+			expMsg: &webhookMessage{
+				Data: &template.Data{
+					Receiver: "my_receiver",
+					Status:   "firing",
+					Alerts: template.Alerts{
+						{
+							Status: "firing",
+							Labels: template.KV{
+								"alertname": "alert1",
+								"lbl1":      "val1",
+							},
+							Annotations: template.KV{
+								"ann1": "annv1",
+							},
+							Fingerprint: "fac0861a85de433a",
+						}, {
+							Status: "firing",
+							Labels: template.KV{
+								"alertname": "alert1",
+								"lbl1":      "val2",
+							},
+							Annotations: template.KV{
+								"ann1": "annv2",
+							},
+							Fingerprint: "fab6861a85d5eeb5",
+						},
 					},
+					GroupLabels: template.KV{
+						"alertname": "",
+					},
+					CommonLabels: template.KV{
+						"alertname": "alert1",
+					},
+					CommonAnnotations: template.KV{},
+					ExternalURL:       "http://localhost",
 				},
+				Version:  "1",
+				GroupKey: "alertname",
+				Title:    "[FIRING:2]  ",
+				State:    "alerting",
+				Message:  "\n**Firing**\nLabels:\n - alertname = alert1\n - lbl1 = val1\nAnnotations:\n - ann1 = annv1\nSource: \nLabels:\n - alertname = alert1\n - lbl1 = val2\nAnnotations:\n - ann1 = annv2\nSource: \n\n\n\n\n",
 			},
 			expInitError: nil,
 			expMsgError:  nil,
@@ -117,13 +146,6 @@ func TestSlackNotifier(t *testing.T) {
 			name:         "Error in initing",
 			settings:     `{}`,
 			expInitError: alerting.ValidationError{Reason: "Could not find url property in settings"},
-		}, {
-			name: "Error in building message",
-			settings: `{
-				"url": "https://test.slack.com",
-				"title": "{{ .BrokenTemplate }"
-			}`,
-			expMsgError: errors.New("build slack message: failed to template Slack message: template: :1: unexpected \"}\" in operand"),
 		},
 	}
 
@@ -133,12 +155,12 @@ func TestSlackNotifier(t *testing.T) {
 			require.NoError(t, err)
 
 			m := &models.AlertNotification{
-				Name:     "slack_testing",
-				Type:     "slack",
+				Name:     "webhook_testing",
+				Type:     "webhook",
 				Settings: settingsJSON,
 			}
 
-			pn, err := NewSlackNotifier(m, tmpl)
+			pn, err := NewWebHookNotifier(m, tmpl)
 			if c.expInitError != nil {
 				require.Error(t, err)
 				require.Equal(t, c.expInitError.Error(), err.Error())
@@ -154,6 +176,7 @@ func TestSlackNotifier(t *testing.T) {
 
 			ctx := notify.WithGroupKey(context.Background(), "alertname")
 			ctx = notify.WithGroupLabels(ctx, model.LabelSet{"alertname": ""})
+			ctx = notify.WithReceiverName(ctx, "my_receiver")
 			ok, err := pn.Notify(ctx, c.alerts...)
 			if c.expMsgError != nil {
 				require.False(t, ok)
@@ -161,18 +184,13 @@ func TestSlackNotifier(t *testing.T) {
 				require.Equal(t, c.expMsgError.Error(), err.Error())
 				return
 			}
-			require.True(t, ok)
 			require.NoError(t, err)
-
-			// Getting Ts from actual since that can't be predicted.
-			obj := &slackMessage{}
-			require.NoError(t, json.Unmarshal([]byte(body), obj))
-			c.expMsg.Attachments[0].Ts = obj.Attachments[0].Ts
+			require.True(t, ok)
 
 			expBody, err := json.Marshal(c.expMsg)
 			require.NoError(t, err)
 
-			require.Equal(t, string(expBody), body)
+			require.JSONEq(t, string(expBody), body)
 		})
 	}
 }
